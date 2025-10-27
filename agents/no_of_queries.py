@@ -1,5 +1,6 @@
 from ollama import chat
 from pydantic import BaseModel
+from agents.models import slm_model
 
 system_prompt = """you are a AI agent who helps to extract number queries from user input.
 basically you need to see how many queries can be differentiated and taken out from the user raw input weather the user may not clearly saparate them but still meaningfully saparate the queries from the whole context and return then in a list  of todos of user requests.
@@ -15,7 +16,7 @@ def parse_queries(query: str, chat_context):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Context: {chat_context}\n\nQuery: {query}"}
         ],
-        model="qwen2.5:3b-instruct-q8_0",
+        model=slm_model,
         format=user_queries.model_json_schema()
     )
     list_queries = user_queries.model_validate_json(response['message']['content']).queries

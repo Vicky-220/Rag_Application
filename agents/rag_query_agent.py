@@ -1,6 +1,7 @@
 import ollama
 import colorama
 from colorama import init
+from agents.models import slm_model
 
 def rag_query_agent(query: str, context):
     """RAG query agent to answer user queries based on provided context."""
@@ -12,7 +13,7 @@ def rag_query_agent(query: str, context):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Context: {context}\n\nQuery: {query}"}
         ],
-        model="qwen2.5:3b-instruct-q8_0"
+        model=slm_model
     )
 
     answer = response['message']['content']

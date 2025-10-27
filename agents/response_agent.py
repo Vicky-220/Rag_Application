@@ -1,6 +1,7 @@
 import ollama
+from agents.models import slm_model
 
-def generate_response(prompt, messages, model="qwen2.5:3b-instruct-q8_0", rag_context=None):
+def generate_response(prompt, messages, model=slm_model, rag_context=None):
     """Generate a response using the specified model and prompt."""
     system_prompt = "You are a helpful AI Agent. Respond to user queries strictly based on the provided context." \
     " If the context does not contain the answer, respond with 'I don't know'."
