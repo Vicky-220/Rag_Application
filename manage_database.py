@@ -199,198 +199,227 @@ class DatabaseManager:
                 add_to_vector_db(chunks)
         except Exception as e:
             print(f"{Fore.RED}✗ Error updating database: {str(e)}{Style.RESET_ALL}")
-
+    
     def visualize_vectors(self) -> None:
-        """Visualize document vectors in 3D space using PCA."""
+        from sklearn.metrics.pairwise import cosine_similarity
+    
         chunks = self.get_all_chunks()
         if not chunks:
-            print(f"{Fore.YELLOW}! No vectors found in the database{Style.RESET_ALL}")
+            print("No vectors found.")
             return
-
-        # Get embeddings and metadata
-        embeddings = np.array([chunk['embedding'] for chunk in chunks])
-        
-        # Reduce dimensionality to 3D
+    
+        # ---------------- Data prep ----------------
+        embeddings = np.array([c["embedding"] for c in chunks])
+        sources = [c["metadata"]["source"] for c in chunks]
+    
         pca = PCA(n_components=3)
-        embeddings_3d = pca.fit_transform(embeddings)
-
-        # Calculate statistics
-        unique_files = len(set(chunk['metadata']['source'] for chunk in chunks))
+        xyz = pca.fit_transform(embeddings)
+    
+        # ---------------- Stats ----------------
+        unique_files = sorted(set(sources))
         total_chunks = len(chunks)
-        chunks_per_file = {}
-        for chunk in chunks:
-            source = chunk['metadata']['source']
-            chunks_per_file[source] = chunks_per_file.get(source, 0) + 1
-
-        # Create subplots: main layout with 3D scatter, stats, and details panel
-        fig = make_subplots(
-            rows=2, cols=2,
-            column_widths=[0.7, 0.3],
-            row_heights=[0.7, 0.3],
-            specs=[
-                [{"type": "scene", "rowspan": 2}, {"type": "table"}],
-                [None, {"type": "table"}]
-            ],
-            subplot_titles=("", "Statistics", "Chunk Details"),
-            horizontal_spacing=0.05,
-            vertical_spacing=0.05
+        avg_chunks = total_chunks / len(unique_files)
+    
+        file_chunk_count = {f: sources.count(f) for f in unique_files}
+    
+        # ---------------- Similarity graph ----------------
+        sim = cosine_similarity(embeddings)
+        np.fill_diagonal(sim, 0)
+    
+        k = 4
+        edge_x, edge_y, edge_z = [], [], []
+        total_connections = 0
+    
+        for i in range(len(sim)):
+            nbrs = np.argsort(sim[i])[-k:]
+            for j in nbrs:
+                edge_x += [xyz[i, 0], xyz[j, 0], None]
+                edge_y += [xyz[i, 1], xyz[j, 1], None]
+                edge_z += [xyz[i, 2], xyz[j, 2], None]
+                total_connections += 1
+    
+        # ---------------- Traces ----------------
+        edge_trace = go.Scatter3d(
+            x=edge_x, y=edge_y, z=edge_z,
+            mode="lines",
+            line=dict(color="rgba(0,255,255,0.25)", width=2),
+            hoverinfo="none",
+            name="Connections"
         )
-
-        # Add 3D scatter plot
-        scatter = go.Scatter3d(
-            x=embeddings_3d[:, 0],
-            y=embeddings_3d[:, 1],
-            z=embeddings_3d[:, 2],
-            mode='markers',
+    
+        # Chunk index scale
+        chunk_index = list(range(total_chunks))
+    
+        # File color mapping
+        file_map = {f: i for i, f in enumerate(unique_files)}
+        file_colors = [file_map[s] for s in sources]
+    
+        node_trace = go.Scatter3d(
+            x=xyz[:, 0],
+            y=xyz[:, 1],
+            z=xyz[:, 2],
+            mode="markers",
             marker=dict(
-                size=6,
-                color=np.arange(len(embeddings)),
-                colorscale='Turbo',
-                opacity=0.85,
-                symbol='circle',
+                size=7,
+                color=chunk_index,
+                colorscale="Turbo",
+                opacity=0.9,
                 colorbar=dict(
                     title="Chunk Index",
-                    x=0.65,  # Adjusted position
-                    thickness=20,
-                    len=0.7,  # Adjusted length
-                    y=0.5,   # Centered vertically
-                    yanchor='middle'
-                ),
-                line=dict(
-                    width=0.5,
-                    color='white'
+                    thickness=18,
+                    len=0.7
                 )
             ),
-            text=[f"ID: {chunk['id']}<br>Source: {chunk['metadata']['source']}<br>Page: {chunk['metadata']['page']}"
-                  for chunk in chunks],
-            hoverinfo='text',
-            name='Document Vectors',
-            customdata=chunks  # Store full chunk data for click events
-        )
-        
-        fig.add_trace(scatter, row=1, col=1)
-
-        # Add statistics table
-        stats_headers = ['Metric', 'Value']
-        stats_cells = [
-            ['Total Files', str(unique_files)],
-            ['Total Chunks', str(total_chunks)],
-            ['Avg. Chunks/File', f"{total_chunks/unique_files:.1f}"],
-            ['PCA Variance Explained', f"{sum(pca.explained_variance_ratio_)*100:.1f}%"],
-            ['---', '---']  # Separator
-        ]
-        
-        # Add per-file statistics
-        for source, count in chunks_per_file.items():
-            stats_cells.append([f"Chunks in {os.path.basename(source)}", str(count)])
-
-        fig.add_trace(
-            go.Table(
-                header=dict(
-                    values=stats_headers,
-                    fill_color='royalblue',
-                    align='left',
-                    font=dict(color='white', size=12)
-                ),
-                cells=dict(
-                    values=list(zip(*stats_cells)),
-                    fill_color=['lightgray', 'white'],
-                    align='left',
-                    font=dict(size=11),
-                    height=25
+            customdata=[
+                (
+                    c["id"],
+                    os.path.basename(c["metadata"]["source"]),
+                    c["metadata"]["page"],
+                    c["content"]
                 )
+                for c in chunks
+            ],
+            hovertemplate=(
+                "<b>Chunk</b><br>"
+                "Index: %{marker.color}<br>"
+                "File: %{customdata[1]}<br>"
+                "Page: %{customdata[2]}<extra></extra>"
             ),
-            row=1, col=2
+            name="Chunks"
         )
-
-        # Add empty details panel (will be updated on click)
-        fig.add_trace(
-            go.Table(
-                header=dict(
-                    values=['Field', 'Value'],
-                    fill_color='royalblue',
-                    align='left',
-                    font=dict(color='white', size=12)
-                ),
-                cells=dict(
-                    values=[['Click a point to see chunk details'], ['']],
-                    align='left',
-                    font=dict(size=11),
-                    height=25
-                )
-            ),
-            row=2, col=2
+    
+        fig = go.Figure(data=[edge_trace, node_trace])
+    
+        # ---------------- Side panels ----------------
+        file_panel_text = "<b>FILES</b><br><br>"
+        for f, c in file_chunk_count.items():
+            file_panel_text += f"{os.path.basename(f)} : {c}<br>"
+    
+        system_panel = (
+            "<b>SYSTEM</b><br><br>"
+            f"Total Files: {len(unique_files)}<br>"
+            f"Total Chunks: {total_chunks}<br>"
+            f"Connections: {total_connections}<br>"
+            f"Avg/ File: {avg_chunks:.1f}<br>"
+            f"PCA Coverage: {sum(pca.explained_variance_ratio_) * 100:.1f}%"
         )
-
-        # Update layout for fullscreen and better aesthetics
+    
+        # ---------------- Layout ----------------
         fig.update_layout(
             title=dict(
-                text="Document Vector Space Analysis",
-                y=0.98,
-                x=0.4,
-                xanchor='center',
-                yanchor='top',
-                font=dict(size=24, color='darkblue')
+                text="Neural Vector Knowledge Graph",
+                font=dict(color="#00FFF6", size=22),
+                x=0.5
             ),
+            paper_bgcolor="#05070D",
+            plot_bgcolor="#05070D",
+            margin=dict(l=0, r=0, t=50, b=0),
+            showlegend=False,
             scene=dict(
-                xaxis_title=f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}% var)",
-                yaxis_title=f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}% var)",
-                zaxis_title=f"PC3 ({pca.explained_variance_ratio_[2]*100:.1f}% var)",
-                bgcolor='white',
-                domain=dict(x=[0, 0.6], y=[0, 1]),  # Adjusted position
-                camera=dict(
-                    up=dict(x=0, y=0, z=1),
-                    center=dict(x=0, y=0, z=0),
-                    eye=dict(x=1.5, y=1.5, z=1.5)
-                )
+                bgcolor="#05070D",
+                xaxis=dict(showbackground=False, color="#00FFF6"),
+                yaxis=dict(showbackground=False, color="#00FFF6"),
+                zaxis=dict(showbackground=False, color="#00FFF6"),
+                camera=dict(eye=dict(x=1.8, y=1.6, z=1.4))
             ),
-            paper_bgcolor='rgba(0,0,0,0)',
-            width=None,  # Full width
-            height=None,  # Full height
-            margin=dict(l=20, r=20, t=50, b=20),
-            showlegend=False
-        )
-
-        # Add click event handler
-        fig.update_layout(
-            clickmode='event+select'
-        )
-
-        # Create a function to update the details panel
-        def update_details(trace, points, selector):
-            if points.point_inds:
-                idx = points.point_inds[0]
-                chunk = chunks[idx]
-                details_table = go.Table(
-                    header=dict(
-                        values=['Field', 'Value'],
-                        fill_color='royalblue',
-                        align='left',
-                        font=dict(color='white', size=12)
-                    ),
-                    cells=dict(
-                        values=[
-                            ['Chunk ID', 'Source', 'Page', 'Content'],
-                            [
-                                chunk['id'],
-                                os.path.basename(chunk['metadata']['source']),
-                                str(chunk['metadata']['page']),
-                                chunk['content'][:200] + '...' if len(chunk['content']) > 200 else chunk['content']
-                            ]
-                        ],
-                        align='left',
-                        font=dict(size=11),
-                        height=30
-                    )
+            annotations=[
+                # System panel
+                dict(
+                    text=system_panel,
+                    x=1.02, y=0.85,
+                    xref="paper", yref="paper",
+                    showarrow=False,
+                    align="left",
+                    font=dict(color="#00FFF6", size=12),
+                    bgcolor="rgba(5,15,25,0.65)",
+                    bordercolor="#00FFF6",
+                    borderwidth=1
+                ),
+                # File panel
+                dict(
+                    text=file_panel_text,
+                    x=1.02, y=0.45,
+                    xref="paper", yref="paper",
+                    showarrow=False,
+                    align="left",
+                    font=dict(color="#E6FFFF", size=11),
+                    bgcolor="rgba(10,20,30,0.7)",
+                    bordercolor="#00FFF6",
+                    borderwidth=1
+                ),
+                dict(
+                    text="Hover = Inspect · Click = Read Chunk",
+                    x=0.5, y=0.02,
+                    showarrow=False,
+                    font=dict(color="#00FFF6", size=11)
                 )
-                with fig.batch_update():
-                    fig.data[-1].update(details_table)
-
-        # Add click event callback
-        scatter.on_click(update_details)
-
-        # Show plot in browser
+            ],
+            updatemenus=[
+                dict(
+                    type="buttons",
+                    direction="right",
+                    x=0.02, y=0.95,
+                    bgcolor="rgba(0,0,0,0.6)",
+                    bordercolor="#00FFF6",
+                    buttons=[
+                        dict(
+                            label="Color: Index",
+                            method="restyle",
+                            args=[{"marker.color": [chunk_index]}]
+                        ),
+                        dict(
+                            label="Color: File",
+                            method="restyle",
+                            args=[{"marker.color": [file_colors]}]
+                        ),
+                        dict(
+                            label="Color: Depth",
+                            method="restyle",
+                            args=[{"marker.color": [xyz[:, 2]]}]
+                        ),
+                        dict(
+                            label="Toggle Links",
+                            method="restyle",
+                            args=[{"visible": [True, False]}, [0]]
+                        )
+                    ]
+                )
+            ]
+        )
+    
+        # ---------------- Click → bottom content panel ----------------
+        def on_click(trace, points, selector):
+            if not points.point_inds:
+                return
+    
+            idx = points.point_inds[0]
+            c = chunks[idx]
+    
+            fig.update_layout(
+                annotations=fig.layout.annotations + (
+                    dict(
+                        text=(
+                            "<b>CHUNK CONTENT</b><br><br>"
+                            f"{c['content']}"
+                        ),
+                        x=0.5, y=-0.15,
+                        xref="paper", yref="paper",
+                        showarrow=False,
+                        align="left",
+                        font=dict(color="#FFFFFF", size=11),
+                        bgcolor="rgba(10,15,25,0.85)",
+                        bordercolor="#00FFF6",
+                        borderwidth=1
+                    ),
+                )
+            )
+    
+        node_trace.on_click(on_click)
+    
         fig.show()
+    
+    
+
 
 def display_menu() -> None:
     """Display the main menu."""
