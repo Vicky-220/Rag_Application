@@ -1,4 +1,8 @@
-from langchain.document_loaders.pdf import PyPDFDirectoryLoader
+from langchain_community.document_loaders import PyPDFDirectoryLoader
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+from langchain_core._api.deprecation import LangChainDeprecationWarning
+warnings.filterwarnings("ignore", category=LangChainDeprecationWarning)
 
 PATH = "./knowledge_base/"
 def load_pdf_documents():

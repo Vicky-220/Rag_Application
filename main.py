@@ -10,8 +10,14 @@ from agents.response_agent import generate_response
 from colorama import init, Fore, Style
 import numpy as np
 
+from agents.intent_parser import parse_intent
+print("Initialing the system this may take few seconds...")
 # Initialize colorama
 init()
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+from langchain_core._api.deprecation import LangChainDeprecationWarning
+warnings.filterwarnings("ignore", category=LangChainDeprecationWarning)
 
 class Chat:
     def __init__(self):

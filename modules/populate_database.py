@@ -1,6 +1,11 @@
 from langchain.schema import Document
 from modules.embedding_function import get_embedding_function
 from langchain.vectorstores.chroma import Chroma
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+from langchain_core._api.deprecation import LangChainDeprecationWarning
+warnings.filterwarnings("ignore", category=LangChainDeprecationWarning)
+
 
 def add_to_vector_db(chunks: list[Document]):
     db = Chroma(
