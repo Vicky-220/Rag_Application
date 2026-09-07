@@ -5,7 +5,7 @@
 
 import React from 'react';
 import { Plus, Trash2, MessageCircle } from 'lucide-react';
-import type { ChatSession } from '@types/index';
+import type { ChatSession } from '@/types';
 import { formatDate, isToday, formatTime } from '@utils/index';
 import './Sidebar.css';
 

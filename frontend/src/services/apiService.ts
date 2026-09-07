@@ -6,13 +6,12 @@
 import axios, { AxiosInstance } from 'axios';
 import type {
   ChatSession,
-  ChatMessageRequest,
   ChatMessageResponse,
   KnowledgeStats,
   KnowledgeStructure,
   UploadResponse,
   Message,
-} from '@types/index';
+} from '@/types';
 
 class APIService {
   private client: AxiosInstance;

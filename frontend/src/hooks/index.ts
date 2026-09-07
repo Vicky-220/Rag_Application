@@ -3,7 +3,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import type { Message, ChatSession } from '@types/index';
+import type { Message, ChatSession } from '@/types';
 import apiService from '@services/apiService';
 
 /**

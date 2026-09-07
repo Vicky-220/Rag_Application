@@ -36,7 +36,7 @@ const App: React.FC = () => {
     window.location.reload();
   };
 
-  const handleDeleteSession = async (id: string) => {
+  const handleDeleteSession = async (_id: string) => {
     await deleteCurrentSession();
     await refreshSessions();
   };

@@ -4,8 +4,8 @@
  */
 
 import React from 'react';
-import { FileText, Copy, ExternalLink } from 'lucide-react';
-import type { ChunkSource } from '@types/index';
+import { FileText, Copy } from 'lucide-react';
+import type { ChunkSource } from '@/types';
 import { copyToClipboard } from '@utils/index';
 import './SourcesPanel.css';
 

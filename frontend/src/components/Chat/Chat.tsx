@@ -5,8 +5,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Loader } from 'lucide-react';
-import type { Message } from '@types/index';
-import { colors } from '@styles/theme';
+import type { Message } from '@/types';
 import './Chat.css';
 
 interface ChatProps {
