@@ -1,12 +1,13 @@
 """
 Chat API routes for FastAPI application
-Handles chat endpoint and message processing
+Handles chat endpoint, streaming, message processing, and source persistence.
 """
 from fastapi import APIRouter, WebSocket, HTTPException, UploadFile, File
-from fastapi.responses import StreamingResponse
 import uuid
 import json
-from typing import Optional
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel
+
 from backend.core.rag_chat import RAGChat
 from backend.database.chat_db import ChatDatabase
 from backend.modules.pdf_loader import load_pdf_documents
@@ -16,13 +17,9 @@ from backend.modules.vector_db import VectorStore
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 # Global instances
-chat_instances = {}
+chat_instances: Dict[str, RAGChat] = {}
 db = ChatDatabase()
 vector_store = VectorStore()
-
-
-# Request/Response models
-from pydantic import BaseModel
 
 
 class MessageRequest(BaseModel):
@@ -47,64 +44,61 @@ class SessionInfo(BaseModel):
 
 
 def get_or_create_chat(session_id: str) -> RAGChat:
-    """Get existing chat instance or create new one"""
+    """Get existing chat instance or create new one populated with history"""
     if session_id not in chat_instances:
         chat_instances[session_id] = RAGChat()
+        # Pre-populate history from SQLite DB
+        existing_msgs = db.get_messages(session_id)
+        for m in existing_msgs:
+            chat_instances[session_id].add_to_history(m["role"], m["content"])
     return chat_instances[session_id]
 
 
 @router.post("/message")
 async def send_message(request: MessageRequest) -> MessageResponse:
     """
-    Send a message and get a response
-    
-    Args:
-        request: MessageRequest with message and optional session_id
-        
-    Returns:
-        MessageResponse with response and session info
+    Send a message and get a response with retrieved sources
     """
-    # Generate session ID if not provided
     session_id = request.session_id or str(uuid.uuid4())
 
     # Create session in database if new
     if not db.get_session(session_id):
-        db.create_session(session_id)
+        # Generate initial title from first query
+        initial_title = request.message[:30] + ("..." if len(request.message) > 30 else "")
+        db.create_session(session_id, title=initial_title)
 
-    # Get or create chat instance
     chat = get_or_create_chat(session_id)
 
-    # Process query
-    response = chat.process_query(request.message)
+    # Process query through complete pipeline
+    result = chat.process_query(request.message)
+    response_text = result["response"]
+    retrieved_sources = result.get("sources", [])
 
-    # Save to database
+    # Save user and assistant messages with source references to DB
     db.add_message(session_id, "user", request.message)
-    db.add_message(session_id, "assistant", response, sources=[])
+    db.add_message(session_id, "assistant", response_text, sources=retrieved_sources)
 
     return MessageResponse(
-        response=response,
+        response=response_text,
         session_id=session_id,
-        sources=[]
+        sources=retrieved_sources
     )
 
 
 @router.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """
-    WebSocket endpoint for streaming responses
+    WebSocket endpoint for streaming responses with sources
     """
     await websocket.accept()
-    
-    # Create session if new
+
     if not db.get_session(session_id):
         db.create_session(session_id)
-    
-    # Get or create chat instance
+
     chat = get_or_create_chat(session_id)
-    
+
     try:
         while True:
-            # Receive message
             data = await websocket.receive_text()
             message_data = json.loads(data)
             user_message = message_data.get("message", "")
@@ -112,30 +106,42 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             if not user_message:
                 continue
 
-            # Save user message
             db.add_message(session_id, "user", user_message)
 
-            # Stream response
             full_response = ""
-            for chunk in chat.process_query_stream(user_message):
-                full_response += chunk
-                await websocket.send_text(json.dumps({
-                    "type": "stream",
-                    "content": chunk
-                }))
+            retrieved_sources = []
 
-            # Save full response
-            db.add_message(session_id, "assistant", full_response)
+            for event in chat.process_query_stream(user_message):
+                if event.get("type") == "sources":
+                    retrieved_sources = event.get("sources", [])
+                    await websocket.send_text(json.dumps({
+                        "type": "sources",
+                        "sources": retrieved_sources
+                    }))
+                elif event.get("type") == "content":
+                    chunk_text = event.get("content", "")
+                    full_response += chunk_text
+                    await websocket.send_text(json.dumps({
+                        "type": "stream",
+                        "content": chunk_text
+                    }))
+
+            # Save assistant message with sources to database
+            db.add_message(session_id, "assistant", full_response, sources=retrieved_sources)
 
             # Send completion signal
             await websocket.send_text(json.dumps({
                 "type": "complete",
-                "content": ""
+                "content": full_response,
+                "sources": retrieved_sources
             }))
 
     except Exception as e:
-        print(f"WebSocket error: {e}")
-        await websocket.close(code=1000)
+        print(f"WebSocket closed/error: {e}")
+        try:
+            await websocket.close(code=1000)
+        except Exception:
+            pass
 
 
 @router.get("/sessions")
@@ -150,7 +156,7 @@ async def get_sessions():
 
 @router.get("/session/{session_id}")
 async def get_session(session_id: str):
-    """Get session and message history"""
+    """Get session and message history with sources"""
     session = db.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -182,7 +188,6 @@ async def delete_session(session_id: str):
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete session")
 
-    # Remove from cache
     if session_id in chat_instances:
         del chat_instances[session_id]
 
@@ -192,14 +197,12 @@ async def delete_session(session_id: str):
 @router.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
     """
-    Upload and process PDF file
-    Adds new content to vector database
+    Upload and process PDF file into knowledge base
     """
-    if file.content_type != "application/pdf":
+    if file.content_type != "application/pdf" and not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
 
     try:
-        # Save file to knowledge base
         from backend.config.settings import KNOWLEDGE_BASE_DIR
         import os
 
@@ -208,7 +211,6 @@ async def upload_pdf(file: UploadFile = File(...)):
             content = await file.read()
             f.write(content)
 
-        # Load and process PDF
         documents = load_pdf_documents()
         if documents:
             chunks = split_documents(documents)
@@ -220,7 +222,12 @@ async def upload_pdf(file: UploadFile = File(...)):
                 "chunks_added": added
             }
         else:
-            raise HTTPException(status_code=500, detail="Failed to process PDF")
+            return {
+                "status": "success",
+                "filename": file.filename,
+                "chunks_added": 0,
+                "message": "File saved but no text extracted"
+            }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Upload error: {str(e)}")

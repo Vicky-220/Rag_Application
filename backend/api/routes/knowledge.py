@@ -1,16 +1,19 @@
 """
 Knowledge base API routes
-Handles knowledge base operations and vector database management
+Handles knowledge base operations, vector database management, and vector visualization
 """
-from fastapi import APIRouter
+import os
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import HTMLResponse
 from backend.modules.vector_db import VectorStore
+from backend.modules.visualizer import VectorVisualizer
 from backend.modules.pdf_loader import get_available_pdfs
 from backend.config.settings import KNOWLEDGE_BASE_DIR
-import os
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 
 vector_store = VectorStore()
+visualizer = VectorVisualizer(vector_store)
 
 
 @router.get("/stats")
@@ -32,7 +35,6 @@ async def get_knowledge_structure():
     """Get nested structure of knowledge base"""
     structure = vector_store.get_structure()
 
-    # Transform for API response
     formatted_structure = {}
     for source, pages in structure.items():
         formatted_structure[os.path.basename(source)] = {
@@ -81,7 +83,7 @@ async def refresh_knowledge_base():
         if not documents:
             return {
                 "status": "error",
-                "message": "No PDF documents found"
+                "message": "No PDF documents found in knowledge_base directory"
             }
 
         chunks = split_documents(documents)
@@ -111,3 +113,54 @@ async def search_knowledge(query: str, k: int = 5):
         "results_count": len(results),
         "results": results
     }
+
+
+@router.get("/visualization", response_class=HTMLResponse)
+async def get_visualization_html():
+    """
+    Render 3D vector space visualization directly as interactive HTML.
+    """
+    html_content = visualizer.generate_html_plot()
+    return HTMLResponse(content=html_content)
+
+
+@router.get("/visualization/data")
+async def get_visualization_data():
+    """
+    Get 2D/3D PCA projection data and semantic edges as JSON.
+    """
+    return visualizer.get_visualization_data()
+
+
+@router.delete("/file/{filename}")
+async def delete_file_from_knowledge(filename: str):
+    """
+    Delete a document file from the knowledge base directory and Chroma collection.
+    """
+    # Delete from Chroma
+    deleted_chunks = vector_store.delete_file(filename)
+
+    # Delete from filesystem if present
+    file_path = os.path.join(KNOWLEDGE_BASE_DIR, filename)
+    file_removed = False
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        file_removed = True
+
+    return {
+        "status": "success",
+        "filename": filename,
+        "deleted_chunks": deleted_chunks,
+        "file_removed_from_disk": file_removed
+    }
+
+
+@router.post("/reset")
+async def reset_vector_database():
+    """
+    Reset and clear the entire Chroma collection.
+    """
+    success = vector_store.reset_database()
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to reset vector database")
+    return {"status": "success", "message": "Vector database reset successfully"}
