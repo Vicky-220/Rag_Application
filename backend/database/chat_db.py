@@ -1,6 +1,6 @@
 """
 SQLite database module for storing chat sessions, messages, and metadata
-Provides ORM models and database operations
+Provides ORM models and database operations with foreign key integrity.
 """
 import json
 import sqlite3
@@ -11,7 +11,7 @@ from backend.config.settings import CHAT_DB_PATH
 
 class ChatDatabase:
     """
-    Manages SQLite database for chat sessions and messages
+    Manages SQLite database for chat sessions, messages, and chunk references
     """
 
     def __init__(self, db_path: str = None):
@@ -24,9 +24,15 @@ class ChatDatabase:
         self.db_path = db_path or str(CHAT_DB_PATH)
         self.init_database()
 
+    def _get_connection(self) -> sqlite3.Connection:
+        """Get database connection with foreign keys enabled"""
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys = ON;")
+        return conn
+
     def init_database(self):
         """Initialize database schema"""
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         c = conn.cursor()
 
         # Sessions table
@@ -85,17 +91,9 @@ class ChatDatabase:
     def create_session(self, session_id: str, title: str = "New Chat", metadata: Dict = None) -> bool:
         """
         Create a new chat session
-        
-        Args:
-            session_id (str): Unique session identifier
-            title (str): Session title
-            metadata (Dict): Optional metadata about the session
-            
-        Returns:
-            bool: Success status
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             c = conn.cursor()
             metadata_json = json.dumps(metadata) if metadata else None
             c.execute(
@@ -117,19 +115,9 @@ class ChatDatabase:
         tokens_used: int = 0
     ) -> int:
         """
-        Add a message to a session
-        
-        Args:
-            session_id (str): Session identifier
-            role (str): Message role (user/assistant)
-            content (str): Message content
-            sources (List[Dict]): Retrieved sources/chunks
-            tokens_used (int): Tokens consumed
-            
-        Returns:
-            int: Message ID
+        Add a message to a session and record chunk references
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         c = conn.cursor()
 
         # Ensure session exists
@@ -142,6 +130,18 @@ class ChatDatabase:
             (session_id, role, content, sources_json, tokens_used)
         )
         message_id = c.lastrowid
+
+        # Insert chunk references if provided
+        if sources and message_id:
+            for s in sources:
+                chunk_id = s.get("chunk_id") or s.get("id") or "unknown"
+                source_file = s.get("source") or "unknown"
+                page = s.get("page") or 0
+                score = s.get("score") or 0.0
+                c.execute(
+                    "INSERT INTO chunk_references (message_id, chunk_id, source_file, page_number, relevance_score) VALUES (?, ?, ?, ?, ?)",
+                    (message_id, chunk_id, source_file, page, score)
+                )
 
         # Update session updated_at
         c.execute(
@@ -157,15 +157,8 @@ class ChatDatabase:
     def get_messages(self, session_id: str, limit: int = None) -> List[Dict[str, Any]]:
         """
         Retrieve messages from a session
-        
-        Args:
-            session_id (str): Session identifier
-            limit (int): Maximum number of messages to retrieve
-            
-        Returns:
-            List[Dict]: Messages with metadata
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         c = conn.cursor()
 
         if limit:
@@ -199,14 +192,8 @@ class ChatDatabase:
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
         Get session information
-        
-        Args:
-            session_id (str): Session identifier
-            
-        Returns:
-            Dict: Session information or None
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         c = conn.cursor()
         c.execute(
             "SELECT id, title, created_at, updated_at, metadata FROM sessions WHERE id = ?",
@@ -229,12 +216,9 @@ class ChatDatabase:
 
     def get_all_sessions(self) -> List[Dict[str, Any]]:
         """
-        Get all chat sessions
-        
-        Returns:
-            List[Dict]: All sessions ordered by most recent
+        Get all chat sessions ordered by most recent
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         c = conn.cursor()
         c.execute(
             "SELECT id, title, created_at, updated_at, metadata FROM sessions ORDER BY updated_at DESC"
@@ -258,16 +242,9 @@ class ChatDatabase:
     def update_session_title(self, session_id: str, title: str) -> bool:
         """
         Update session title
-        
-        Args:
-            session_id (str): Session identifier
-            title (str): New title
-            
-        Returns:
-            bool: Success status
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             c = conn.cursor()
             c.execute(
                 "UPDATE sessions SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -282,16 +259,10 @@ class ChatDatabase:
 
     def delete_session(self, session_id: str) -> bool:
         """
-        Delete a session and all its messages
-        
-        Args:
-            session_id (str): Session identifier
-            
-        Returns:
-            bool: Success status
+        Delete a session and cascade delete all its messages and chunk references
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             c = conn.cursor()
             c.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             conn.commit()
@@ -304,17 +275,9 @@ class ChatDatabase:
     def set_metadata(self, session_id: str, key: str, value: Any) -> bool:
         """
         Set session metadata
-        
-        Args:
-            session_id (str): Session identifier
-            key (str): Metadata key
-            value (Any): Metadata value
-            
-        Returns:
-            bool: Success status
         """
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             c = conn.cursor()
             value_str = json.dumps(value) if not isinstance(value, str) else value
             c.execute(
@@ -331,15 +294,8 @@ class ChatDatabase:
     def get_metadata(self, session_id: str, key: str) -> Optional[Any]:
         """
         Get session metadata
-        
-        Args:
-            session_id (str): Session identifier
-            key (str): Metadata key
-            
-        Returns:
-            Any: Metadata value or None
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_connection()
         c = conn.cursor()
         c.execute(
             "SELECT value FROM conversation_metadata WHERE session_id = ? AND key = ?",
