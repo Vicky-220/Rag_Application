@@ -1,16 +1,14 @@
 """
 RAG Query Agent - Refines user queries for vector database search
 Generates optimal search queries based on context
+Supports OpenAI-compatible APIs and Ollama.
 """
 import warnings
-import ollama
 from colorama import init, Fore, Style
-from backend.agents.models import LLM_MODEL
+from backend.core.llm_provider import llm_client
 
 init()
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-from langchain_core._api.deprecation import LangChainDeprecationWarning
-warnings.filterwarnings("ignore", category=LangChainDeprecationWarning)
 
 
 def refine_search_query(query: str, conversation_context: str = "") -> str:
@@ -27,7 +25,8 @@ def refine_search_query(query: str, conversation_context: str = "") -> str:
     system_prompt = (
         "You are an AI agent that generates optimal search queries for RAG (Retrieval Augmented Generation) systems. "
         "Given a user query, generate a single, well-crafted search query that will retrieve the most relevant documents "
-        "from a vector database. The query should be specific, clear, and include relevant keywords."
+        "from a vector database. The query should be specific, clear, and include relevant keywords. "
+        "Output ONLY the search query, with no explanations or punctuation around it."
     )
 
     messages = [
@@ -47,16 +46,15 @@ def refine_search_query(query: str, conversation_context: str = "") -> str:
     })
 
     try:
-        response = ollama.chat(
+        refined_query = llm_client.chat_completion(
             messages=messages,
-            model=LLM_MODEL
-        )
-        refined_query = response['message']['content']
+            temperature=0.3
+        ).strip().strip('"').strip("'")
         
         print(
             f"{Fore.LIGHTMAGENTA_EX}[RAG Query Agent] Refined Search Query:{Style.RESET_ALL} {refined_query}\n"
         )
-        return refined_query
+        return refined_query or query
     except Exception as e:
         print(f"{Fore.RED}[RAG Query Agent] Error refining query: {e}{Style.RESET_ALL}")
         return query

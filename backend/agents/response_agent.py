@@ -1,15 +1,12 @@
 """
 Response Agent - Generates final responses based on RAG context
 Uses retrieved documents to provide accurate, context-aware answers
+Supports OpenAI-compatible APIs and Ollama (standard and streaming).
 """
 import warnings
-import ollama
-from backend.agents.models import LLM_MODEL
+from backend.core.llm_provider import llm_client
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-from langchain_core._api.deprecation import LangChainDeprecationWarning
-warnings.filterwarnings("ignore", category=LangChainDeprecationWarning)
-
 
 SYSTEM_PROMPT = (
     "You are a helpful AI Assistant powered by a Retrieval Augmented Generation (RAG) system. "
@@ -53,11 +50,8 @@ def generate_response(user_query: str, rag_context: str, conversation_history: l
     })
 
     try:
-        response = ollama.chat(
-            messages=messages,
-            model=LLM_MODEL
-        )
-        return response['message']['content']
+        response = llm_client.chat_completion(messages=messages)
+        return response
     except Exception as e:
         print(f"Error generating response: {e}")
         return "I encountered an error while generating a response. Please try again."
@@ -96,15 +90,8 @@ def generate_response_stream(user_query: str, rag_context: str, conversation_his
     })
 
     try:
-        stream = ollama.chat(
-            messages=messages,
-            model=LLM_MODEL,
-            stream=True
-        )
-
-        for chunk in stream:
-            if 'message' in chunk and 'content' in chunk['message']:
-                yield chunk['message']['content']
+        for chunk in llm_client.chat_stream(messages=messages):
+            yield chunk
     except Exception as e:
         print(f"Error generating streaming response: {e}")
         yield "I encountered an error while generating a response. Please try again."

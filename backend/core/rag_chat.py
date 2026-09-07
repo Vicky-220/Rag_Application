@@ -1,8 +1,8 @@
 """
 Core RAG Chat Pipeline
-Orchestrates the multi-agent RAG workflow
+Orchestrates the multi-agent RAG workflow with context retrieval and source tracking.
 """
-from typing import List, Dict, Any, Generator
+from typing import List, Dict, Any, Generator, Tuple
 from backend.modules.vector_db import VectorStore
 from backend.agents.query_parser import parse_queries
 from backend.agents.rag_query_agent import refine_search_query
@@ -17,10 +17,11 @@ from backend.config.settings import (
 class RAGChat:
     """
     Orchestrates the complete RAG pipeline:
-    1. Query parsing (resolve pronouns)
+    1. Query parsing (resolve pronouns via structured output)
     2. Query refinement (optimize for search)
     3. Vector search (retrieve relevant chunks)
     4. Response generation (with context)
+    5. Source attribution (track sources for UI & DB)
     """
 
     def __init__(self):
@@ -30,25 +31,11 @@ class RAGChat:
         self.context_turns = CONTEXT_TURNS
 
     def add_to_history(self, role: str, content: str):
-        """
-        Add message to conversation history
-        
-        Args:
-            role (str): Message role (user/assistant)
-            content (str): Message content
-        """
+        """Add message to conversation history"""
         self.conversation_history.append({"role": role, "content": content})
 
     def get_recent_context(self, turns: int = None) -> str:
-        """
-        Get recent conversation context for agent input
-        
-        Args:
-            turns (int): Number of user-assistant exchanges to include
-            
-        Returns:
-            str: Formatted recent conversation context
-        """
+        """Get recent conversation context for agent input"""
         turns = turns or self.context_turns
         filtered = [m for m in self.conversation_history if m['role'] in ('user', 'assistant')]
 
@@ -59,32 +46,15 @@ class RAGChat:
         return "\n".join([f"{m['role']}: {m['content']}" for m in recent])
 
     def search_knowledge_base(self, query: str) -> List[Dict[str, Any]]:
-        """
-        Search vector database for relevant chunks
-        
-        Args:
-            query (str): Search query
-            
-        Returns:
-            List[Dict]: Relevant chunks with scores
-        """
-        results = self.vector_store.search(
+        """Search vector database for relevant chunks"""
+        return self.vector_store.search(
             query=query,
             k=TOP_K_CHUNKS,
             score_threshold=SIMILARITY_THRESHOLD
         )
-        return results
 
     def format_context(self, chunks: List[Dict[str, Any]]) -> str:
-        """
-        Format retrieved chunks into context string
-        
-        Args:
-            chunks (List[Dict]): Retrieved chunks
-            
-        Returns:
-            str: Formatted context
-        """
+        """Format retrieved chunks into context string"""
         if not chunks:
             return "No relevant information found in knowledge base."
 
@@ -92,7 +62,7 @@ class RAGChat:
         for i, chunk in enumerate(chunks, 1):
             source = chunk.get('source', 'Unknown')
             page = chunk.get('page', 'N/A')
-            score = chunk.get('score', 0)
+            score = chunk.get('score', 0.0)
             content = chunk.get('content', '')
 
             context_parts.append(
@@ -101,77 +71,74 @@ class RAGChat:
 
         return "\n\n".join(context_parts)
 
-    def process_query(self, user_query: str) -> str:
+    def retrieve_context(self, user_query: str) -> Tuple[str, List[Dict[str, Any]]]:
         """
-        Process a user query through the complete RAG pipeline
-        
-        Args:
-            user_query (str): User's question
-            
-        Returns:
-            str: Generated response
+        Execute multi-agent retrieval pipeline:
+        1. Resolve pronouns & compound queries
+        2. Refine query keywords
+        3. Search vector DB and deduplicate chunks
         """
-        # Add user query to history
-        self.add_to_history("user", user_query)
-
-        # Step 1: Parse and resolve queries
         recent_context = self.get_recent_context()
         parsed_queries = parse_queries(user_query, recent_context)
 
-        # Step 2: Search knowledge base for each parsed query
-        all_chunks = []
+        # Search vector database for each parsed query
+        seen_ids = set()
+        deduped_chunks = []
+
         for query in parsed_queries:
-            # Refine query for better search
             refined_query = refine_search_query(query, recent_context)
-            # Search vector database
             chunks = self.search_knowledge_base(refined_query)
-            all_chunks.extend(chunks)
+            for c in chunks:
+                cid = c.get("chunk_id", c.get("content")[:50])
+                if cid not in seen_ids:
+                    seen_ids.add(cid)
+                    # Format chunk source for UI
+                    deduped_chunks.append({
+                        "id": cid,
+                        "chunk_id": cid,
+                        "source": c.get("source", "Unknown"),
+                        "page": c.get("page", 0),
+                        "score": c.get("score", 0.0),
+                        "content": c.get("content", "")
+                    })
 
-        # Step 3: Format context
-        formatted_context = self.format_context(all_chunks)
+        formatted_context = self.format_context(deduped_chunks)
+        return formatted_context, deduped_chunks
 
-        # Step 4: Generate response with context
+    def process_query(self, user_query: str) -> Dict[str, Any]:
+        """
+        Process a user query through the complete RAG pipeline.
+        Returns dict containing both response text and retrieved sources.
+        """
+        self.add_to_history("user", user_query)
+
+        formatted_context, sources = self.retrieve_context(user_query)
+
         response = generate_response(
             user_query=user_query,
             rag_context=formatted_context,
-            conversation_history=self.conversation_history[:-1]  # Exclude current user message
+            conversation_history=self.conversation_history[:-1]
         )
 
-        # Add assistant response to history
         self.add_to_history("assistant", response)
 
-        return response
+        return {
+            "response": response,
+            "sources": sources
+        }
 
-    def process_query_stream(self, user_query: str) -> Generator[str, None, None]:
+    def process_query_stream(self, user_query: str) -> Generator[Dict[str, Any], None, None]:
         """
-        Process a user query and stream the response
-        
-        Args:
-            user_query (str): User's question
-            
-        Yields:
-            str: Response chunks
+        Process user query and yield both sources and streaming chunks.
         """
-        # Add user query to history
         self.add_to_history("user", user_query)
 
-        # Step 1: Parse and resolve queries
-        recent_context = self.get_recent_context()
-        parsed_queries = parse_queries(user_query, recent_context)
+        formatted_context, sources = self.retrieve_context(user_query)
 
-        # Step 2: Search knowledge base for each parsed query
-        all_chunks = []
-        for query in parsed_queries:
-            # Refine query for better search
-            refined_query = refine_search_query(query, recent_context)
-            # Search vector database
-            chunks = self.search_knowledge_base(refined_query)
-            all_chunks.extend(chunks)
+        # Emit sources first
+        yield {"type": "sources", "sources": sources}
 
-        # Step 3: Format context
-        formatted_context = self.format_context(all_chunks)
-
-        # Step 4: Generate streaming response
+        # Stream response tokens
         full_response = ""
         for chunk in generate_response_stream(
             user_query=user_query,
@@ -179,21 +146,6 @@ class RAGChat:
             conversation_history=self.conversation_history[:-1]
         ):
             full_response += chunk
-            yield chunk
+            yield {"type": "content", "content": chunk}
 
-        # Add complete response to history
         self.add_to_history("assistant", full_response)
-
-    def get_sources(self) -> List[Dict[str, str]]:
-        """
-        Get metadata about available knowledge sources
-        
-        Returns:
-            List[Dict]: Information about sources
-        """
-        stats = self.vector_store.get_collection_stats()
-        return {
-            "total_chunks": stats["total_chunks"],
-            "sources": stats["sources"],
-            "total_sources": stats["total_sources"]
-        }

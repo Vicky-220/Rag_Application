@@ -1,15 +1,13 @@
 """
 Query Parser Agent - Resolves pronouns and splits compound queries
 Analyzes user queries in context of conversation history
+Supports OpenAI-compatible structured outputs and Ollama formats.
 """
 import warnings
-from ollama import chat
 from pydantic import BaseModel
-from backend.agents.models import LLM_MODEL
+from backend.core.llm_provider import llm_client
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-from langchain_core._api.deprecation import LangChainDeprecationWarning
-warnings.filterwarnings("ignore", category=LangChainDeprecationWarning)
 
 
 class QueryList(BaseModel):
@@ -29,12 +27,13 @@ Rules:
 3. Split compound questions into separate focused queries.
 4. Each query must be fully standalone — someone reading only the query list must understand exactly what to search for.
 5. Be specific: prefer "fundamental rights in Indian Constitution Article 12-35" over "Indian laws".
-6. Output ONLY the queries list. No explanation."""
+6. Output ONLY the JSON object conforming to the schema with key "queries"."""
 
 
 def parse_queries(query: str, chat_context: str = "") -> list[str]:
     """
-    Parse and resolve user queries using full conversation context
+    Parse and resolve user queries using full conversation context.
+    Executes structured output via OpenAI compatibility or Ollama.
     
     Args:
         query (str): Current user query
@@ -59,17 +58,13 @@ def parse_queries(query: str, chat_context: str = "") -> list[str]:
         "content": (
             f"New user message: \"{query}\"\n\n"
             "Resolve all references using the conversation above. "
-            "Output a list of fully explicit, self-contained search queries."
+            "Output a JSON object with a list of fully explicit, self-contained search queries."
         )
     })
 
     try:
-        response = chat(
-            messages=messages,
-            model=LLM_MODEL,
-            format=QueryList.model_json_schema()
-        )
-        list_queries = QueryList.model_validate_json(response['message']['content']).queries
+        parsed_result = llm_client.parse_structured(messages, QueryList)
+        list_queries = parsed_result.queries
 
         if not list_queries:
             list_queries = [query]

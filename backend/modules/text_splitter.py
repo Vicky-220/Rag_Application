@@ -2,12 +2,10 @@
 Text splitter module for splitting documents into manageable chunks
 """
 import warnings
-from langchain.schema import Document
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-from langchain_core._api.deprecation import LangChainDeprecationWarning
-warnings.filterwarnings("ignore", category=LangChainDeprecationWarning)
 
 
 def split_documents(documents: list[Document], chunk_size: int = 600, chunk_overlap: int = 200):
