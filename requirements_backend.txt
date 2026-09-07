@@ -5,10 +5,12 @@ pydantic
 python-multipart
 
 # LLM & Embeddings
+openai
 langchain
 langchain-community
 langchain-core
 langchain-text-splitters
+langchain-chroma
 ollama
 
 # Vector Database
@@ -20,7 +22,7 @@ pypdf
 # Data Processing
 numpy
 
-# Visualization (optional)
+# Visualization
 plotly
 scikit-learn
 

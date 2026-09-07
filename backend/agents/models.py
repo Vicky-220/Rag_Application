@@ -1,7 +1,6 @@
 """
-Model configuration for Ollama-based LLM agents
+Model configuration re-exported from global settings
 """
+from backend.config.settings import LLM_MODEL, EMBEDDING_MODEL
 
-# Ollama model configuration
-LLM_MODEL = "qwen2.5:3b"
-EMBEDDING_MODEL = "bge-m3:latest"
+__all__ = ["LLM_MODEL", "EMBEDDING_MODEL"]

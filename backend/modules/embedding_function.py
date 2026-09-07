@@ -1,21 +1,15 @@
 """
-Embedding function module for generating embeddings using Ollama
+Embedding function module for generating embeddings using Universal Provider
+Supports OpenAI-compatible endpoints, Ollama, and local ONNX embeddings.
 """
-import warnings
-from langchain_community.embeddings import OllamaEmbeddings
-from backend.config.settings import EMBEDDING_MODEL
-
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-from langchain_core._api.deprecation import LangChainDeprecationWarning
-warnings.filterwarnings("ignore", category=LangChainDeprecationWarning)
+from backend.core.llm_provider import embeddings_client
 
 
 def get_embedding_function():
     """
-    Get OllamaEmbeddings instance with configured model
+    Get universal embeddings function instance.
     
     Returns:
-        OllamaEmbeddings: Embedding function using configured model
+        Embeddings: LangChain-compatible embeddings instance
     """
-    embeddings = OllamaEmbeddings(model=EMBEDDING_MODEL)
-    return embeddings
+    return embeddings_client
